@@ -1,0 +1,9 @@
+*.md
+.git
+.gitignore
+Dockerfile
+deployment.yaml
+Makefile
+*.yaml
+k8s-deployment-exporter
+.vscode

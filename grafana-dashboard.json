@@ -1,0 +1,167 @@
+{
+  "dashboard": {
+    "title": "Kubernetes Deployment Downtime Monitoring",
+    "tags": ["kubernetes", "deployments", "downtime"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Current Deployment Status",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "k8s_deployment_status",
+            "legendFormat": "{{namespace}}/{{deployment}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [
+              {
+                "options": {
+                  "0": {"text": "Down", "color": "red"},
+                  "1": {"text": "Up", "color": "green"}
+                },
+                "type": "value"
+              }
+            ],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "red"},
+                {"value": 1, "color": "green"}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Recovery Time (milliseconds)",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "k8s_deployment_recovery_time_milliseconds",
+            "legendFormat": "{{namespace}}/{{deployment}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ms",
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "smooth",
+              "fillOpacity": 10
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Downtime Duration",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "k8s_deployment_downtime_duration_seconds",
+            "legendFormat": "{{namespace}}/{{deployment}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "custom": {
+              "drawStyle": "bars",
+              "fillOpacity": 80
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+      },
+      {
+        "id": 4,
+        "title": "Restart Rate",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "rate(k8s_deployment_restart_total[5m])",
+            "legendFormat": "{{namespace}}/{{deployment}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ops",
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "linear"
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+      },
+      {
+        "id": 5,
+        "title": "Top 10 Deployments by Restart Count (24h)",
+        "type": "bargauge",
+        "targets": [
+          {
+            "expr": "topk(10, increase(k8s_deployment_restart_total[24h]))",
+            "legendFormat": "{{namespace}}/{{deployment}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 5, "color": "yellow"},
+                {"value": 10, "color": "red"}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+      },
+      {
+        "id": 6,
+        "title": "Heartbeat Freshness (seconds ago)",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "time() - k8s_deployment_heartbeat_timestamp_seconds",
+            "legendFormat": "{{namespace}}/{{deployment}}",
+            "format": "table",
+            "instant": true
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "custom": {
+              "align": "auto"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": 0, "color": "green"},
+                {"value": 60, "color": "yellow"},
+                {"value": 120, "color": "red"}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+      }
+    ],
+    "refresh": "30s",
+    "schemaVersion": 36,
+    "style": "dark",
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    }
+  }
+}
