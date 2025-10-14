@@ -72,6 +72,81 @@ var (
 		},
 		[]string{"namespace", "deployment"},
 	)
+
+	// Deployment condition status
+	deploymentConditionStatus = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_condition_status",
+			Help: "Deployment condition status (1=true, 0=false, -1=unknown)",
+		},
+		[]string{"namespace", "deployment", "condition", "status"},
+	)
+
+	// Deployment replicas info
+	deploymentReplicasDesired = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_replicas_desired",
+			Help: "Number of desired replicas for deployment",
+		},
+		[]string{"namespace", "deployment"},
+	)
+
+	deploymentReplicasReady = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_replicas_ready",
+			Help: "Number of ready replicas for deployment",
+		},
+		[]string{"namespace", "deployment"},
+	)
+
+	deploymentReplicasAvailable = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_replicas_available",
+			Help: "Number of available replicas for deployment",
+		},
+		[]string{"namespace", "deployment"},
+	)
+
+	deploymentReplicasUnavailable = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_replicas_unavailable",
+			Help: "Number of unavailable replicas for deployment",
+		},
+		[]string{"namespace", "deployment"},
+	)
+
+	deploymentReplicasUpdated = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_replicas_updated",
+			Help: "Number of updated replicas for deployment",
+		},
+		[]string{"namespace", "deployment"},
+	)
+
+	// Deployment metadata
+	deploymentCreationTime = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_created_timestamp_seconds",
+			Help: "Unix timestamp when the deployment was created",
+		},
+		[]string{"namespace", "deployment"},
+	)
+
+	deploymentGeneration = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_metadata_generation",
+			Help: "Sequence number representing a specific generation of the desired state",
+		},
+		[]string{"namespace", "deployment"},
+	)
+
+	deploymentObservedGeneration = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_status_observed_generation",
+			Help: "The generation observed by the deployment controller",
+		},
+		[]string{"namespace", "deployment"},
+	)
 )
 
 type DeploymentTracker struct {
@@ -88,6 +163,15 @@ func init() {
 	prometheus.MustRegister(deploymentHeartbeat)
 	prometheus.MustRegister(deploymentRecoveryTimeMs)
 	prometheus.MustRegister(deploymentDowntimeStart)
+	prometheus.MustRegister(deploymentConditionStatus)
+	prometheus.MustRegister(deploymentReplicasDesired)
+	prometheus.MustRegister(deploymentReplicasReady)
+	prometheus.MustRegister(deploymentReplicasAvailable)
+	prometheus.MustRegister(deploymentReplicasUnavailable)
+	prometheus.MustRegister(deploymentReplicasUpdated)
+	prometheus.MustRegister(deploymentCreationTime)
+	prometheus.MustRegister(deploymentGeneration)
+	prometheus.MustRegister(deploymentObservedGeneration)
 }
 
 func main() {
@@ -218,9 +302,45 @@ func (t *DeploymentTracker) processDeployment(deployment *appsv1.Deployment) {
 	now := time.Now()
 	deploymentHeartbeat.WithLabelValues(ns, name).Set(float64(now.Unix()))
 
+	// Set metadata metrics
+	deploymentCreationTime.WithLabelValues(ns, name).Set(float64(deployment.CreationTimestamp.Unix()))
+	deploymentGeneration.WithLabelValues(ns, name).Set(float64(deployment.Generation))
+	deploymentObservedGeneration.WithLabelValues(ns, name).Set(float64(deployment.Status.ObservedGeneration))
+
+	// Set replica metrics
+	if deployment.Spec.Replicas != nil {
+		deploymentReplicasDesired.WithLabelValues(ns, name).Set(float64(*deployment.Spec.Replicas))
+	}
+	deploymentReplicasReady.WithLabelValues(ns, name).Set(float64(deployment.Status.ReadyReplicas))
+	deploymentReplicasAvailable.WithLabelValues(ns, name).Set(float64(deployment.Status.AvailableReplicas))
+	deploymentReplicasUnavailable.WithLabelValues(ns, name).Set(float64(deployment.Status.UnavailableReplicas))
+	deploymentReplicasUpdated.WithLabelValues(ns, name).Set(float64(deployment.Status.UpdatedReplicas))
+
+	// Process deployment conditions (Available, Progressing, ReplicaFailure)
+	for _, condition := range deployment.Status.Conditions {
+		conditionType := string(condition.Type)
+		conditionStatus := string(condition.Status)
+		
+		var statusValue float64
+		switch conditionStatus {
+		case "True":
+			statusValue = 1
+		case "False":
+			statusValue = 0
+		default: // "Unknown"
+			statusValue = -1
+		}
+		
+		deploymentConditionStatus.WithLabelValues(ns, name, conditionType, conditionStatus).Set(statusValue)
+	}
+
 	// Check if deployment is ready
-	isReady := deployment.Status.ReadyReplicas == deployment.Status.Replicas &&
-		deployment.Status.Replicas > 0 &&
+	desiredReplicas := int32(0)
+	if deployment.Spec.Replicas != nil {
+		desiredReplicas = *deployment.Spec.Replicas
+	}
+	isReady := deployment.Status.ReadyReplicas == desiredReplicas &&
+		desiredReplicas > 0 &&
 		deployment.Status.UnavailableReplicas == 0
 
 	// Track status
