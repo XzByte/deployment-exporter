@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -11,11 +12,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	metricsv "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
 var (
@@ -147,12 +151,88 @@ var (
 		},
 		[]string{"namespace", "deployment"},
 	)
+
+	// Deployment availability ratio
+	deploymentAvailabilityRatio = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_availability_ratio",
+			Help: "Deployment availability ratio (ready/desired)",
+		},
+		[]string{"namespace", "deployment", "available", "desired"},
+	)
+
+	// Resource usage metrics
+	deploymentCPUUsage = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_cpu_usage_cores",
+			Help: "Total CPU usage in cores for all pods in the deployment",
+		},
+		[]string{"namespace", "deployment"},
+	)
+
+	deploymentMemoryUsage = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_memory_usage_bytes",
+			Help: "Total memory usage in bytes for all pods in the deployment",
+		},
+		[]string{"namespace", "deployment"},
+	)
+
+	deploymentCPURequest = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_cpu_request_cores",
+			Help: "Total CPU requests in cores for all pods in the deployment",
+		},
+		[]string{"namespace", "deployment"},
+	)
+
+	deploymentMemoryRequest = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_memory_request_bytes",
+			Help: "Total memory requests in bytes for all pods in the deployment",
+		},
+		[]string{"namespace", "deployment"},
+	)
+
+	deploymentCPULimit = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_cpu_limit_cores",
+			Help: "Total CPU limits in cores for all pods in the deployment",
+		},
+		[]string{"namespace", "deployment"},
+	)
+
+	deploymentMemoryLimit = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_memory_limit_bytes",
+			Help: "Total memory limits in bytes for all pods in the deployment",
+		},
+		[]string{"namespace", "deployment"},
+	)
+
+	// Resource usage percentage
+	deploymentCPUUsagePercent = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_cpu_usage_percent",
+			Help: "CPU usage as percentage of request",
+		},
+		[]string{"namespace", "deployment"},
+	)
+
+	deploymentMemoryUsagePercent = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "k8s_deployment_memory_usage_percent",
+			Help: "Memory usage as percentage of request",
+		},
+		[]string{"namespace", "deployment"},
+	)
 )
 
 type DeploymentTracker struct {
-	clientset     *kubernetes.Clientset
-	downtimeStart map[string]time.Time
-	namespace     string
+	clientset      *kubernetes.Clientset
+	metricsClient  *metricsv.Clientset
+	downtimeStart  map[string]time.Time
+	namespace      string
 }
 
 func init() {
@@ -172,6 +252,15 @@ func init() {
 	prometheus.MustRegister(deploymentCreationTime)
 	prometheus.MustRegister(deploymentGeneration)
 	prometheus.MustRegister(deploymentObservedGeneration)
+	prometheus.MustRegister(deploymentAvailabilityRatio)
+	prometheus.MustRegister(deploymentCPUUsage)
+	prometheus.MustRegister(deploymentMemoryUsage)
+	prometheus.MustRegister(deploymentCPURequest)
+	prometheus.MustRegister(deploymentMemoryRequest)
+	prometheus.MustRegister(deploymentCPULimit)
+	prometheus.MustRegister(deploymentMemoryLimit)
+	prometheus.MustRegister(deploymentCPUUsagePercent)
+	prometheus.MustRegister(deploymentMemoryUsagePercent)
 }
 
 func main() {
@@ -199,8 +288,15 @@ func main() {
 		log.Fatalf("Error creating kubernetes client: %v", err)
 	}
 
+	// Create metrics client
+	metricsClient, err := metricsv.NewForConfig(config)
+	if err != nil {
+		log.Printf("Warning: Could not create metrics client: %v (resource metrics will not be available)", err)
+	}
+
 	tracker := &DeploymentTracker{
 		clientset:     clientset,
+		metricsClient: metricsClient,
 		downtimeStart: make(map[string]time.Time),
 		namespace:     namespace,
 	}
@@ -316,6 +412,20 @@ func (t *DeploymentTracker) processDeployment(deployment *appsv1.Deployment) {
 	deploymentReplicasUnavailable.WithLabelValues(ns, name).Set(float64(deployment.Status.UnavailableReplicas))
 	deploymentReplicasUpdated.WithLabelValues(ns, name).Set(float64(deployment.Status.UpdatedReplicas))
 
+	// Set availability ratio with labels showing "X/Y" format
+	if deployment.Spec.Replicas != nil {
+		available := fmt.Sprintf("%d", deployment.Status.ReadyReplicas)
+		desired := fmt.Sprintf("%d", *deployment.Spec.Replicas)
+		ratio := float64(0)
+		if *deployment.Spec.Replicas > 0 {
+			ratio = float64(deployment.Status.ReadyReplicas) / float64(*deployment.Spec.Replicas)
+		}
+		deploymentAvailabilityRatio.WithLabelValues(ns, name, available, desired).Set(ratio)
+	}
+
+	// Collect resource usage metrics
+	t.collectResourceMetrics(ns, name, deployment)
+
 	// Process deployment conditions (Available, Progressing, ReplicaFailure)
 	for _, condition := range deployment.Status.Conditions {
 		conditionType := string(condition.Type)
@@ -373,6 +483,81 @@ func (t *DeploymentTracker) processDeployment(deployment *appsv1.Deployment) {
 			// Display time in WIB (UTC+7)
 			wibTime := now.UTC().Add(7 * time.Hour).Format("2006/01/02 15:04:05")
 			log.Printf("[%s WIB] Deployment %s/%s went down", wibTime, ns, name)
+		}
+	}
+}
+
+func (t *DeploymentTracker) collectResourceMetrics(namespace, deploymentName string, deployment *appsv1.Deployment) {
+	// Get pods for this deployment
+	labelSelector := metav1.FormatLabelSelector(deployment.Spec.Selector)
+	pods, err := t.clientset.CoreV1().Pods(namespace).List(context.Background(), metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
+		log.Printf("Error listing pods for deployment %s/%s: %v", namespace, deploymentName, err)
+		return
+	}
+
+	// Calculate resource requests and limits
+	var totalCPURequest, totalMemoryRequest resource.Quantity
+	var totalCPULimit, totalMemoryLimit resource.Quantity
+
+	for _, pod := range pods.Items {
+		for _, container := range pod.Spec.Containers {
+			if cpuReq := container.Resources.Requests[corev1.ResourceCPU]; !cpuReq.IsZero() {
+				totalCPURequest.Add(cpuReq)
+			}
+			if memReq := container.Resources.Requests[corev1.ResourceMemory]; !memReq.IsZero() {
+				totalMemoryRequest.Add(memReq)
+			}
+			if cpuLim := container.Resources.Limits[corev1.ResourceCPU]; !cpuLim.IsZero() {
+				totalCPULimit.Add(cpuLim)
+			}
+			if memLim := container.Resources.Limits[corev1.ResourceMemory]; !memLim.IsZero() {
+				totalMemoryLimit.Add(memLim)
+			}
+		}
+	}
+
+	// Set request and limit metrics
+	deploymentCPURequest.WithLabelValues(namespace, deploymentName).Set(float64(totalCPURequest.MilliValue()) / 1000.0)
+	deploymentMemoryRequest.WithLabelValues(namespace, deploymentName).Set(float64(totalMemoryRequest.Value()))
+	deploymentCPULimit.WithLabelValues(namespace, deploymentName).Set(float64(totalCPULimit.MilliValue()) / 1000.0)
+	deploymentMemoryLimit.WithLabelValues(namespace, deploymentName).Set(float64(totalMemoryLimit.Value()))
+
+	// Try to get actual usage from metrics server
+	if t.metricsClient != nil {
+		podMetrics, err := t.metricsClient.MetricsV1beta1().PodMetricses(namespace).List(context.Background(), metav1.ListOptions{
+			LabelSelector: labelSelector,
+		})
+		if err != nil {
+			// Metrics server might not be available
+			return
+		}
+
+		var totalCPUUsage, totalMemoryUsage int64
+		for _, pm := range podMetrics.Items {
+			for _, container := range pm.Containers {
+				cpuUsage := container.Usage[corev1.ResourceCPU]
+				memUsage := container.Usage[corev1.ResourceMemory]
+				totalCPUUsage += cpuUsage.MilliValue()
+				totalMemoryUsage += memUsage.Value()
+			}
+		}
+
+		// Set usage metrics
+		cpuCores := float64(totalCPUUsage) / 1000.0
+		deploymentCPUUsage.WithLabelValues(namespace, deploymentName).Set(cpuCores)
+		deploymentMemoryUsage.WithLabelValues(namespace, deploymentName).Set(float64(totalMemoryUsage))
+
+		// Calculate usage percentages
+		if totalCPURequest.MilliValue() > 0 {
+			cpuPercent := (float64(totalCPUUsage) / float64(totalCPURequest.MilliValue())) * 100
+			deploymentCPUUsagePercent.WithLabelValues(namespace, deploymentName).Set(cpuPercent)
+		}
+		if totalMemoryRequest.Value() > 0 {
+			memPercent := (float64(totalMemoryUsage) / float64(totalMemoryRequest.Value())) * 100
+			deploymentMemoryUsagePercent.WithLabelValues(namespace, deploymentName).Set(memPercent)
 		}
 	}
 }
