@@ -164,48 +164,48 @@ var (
 	// Resource usage metrics
 	deploymentCPUUsage = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "k8s_deployment_cpu_usage_cores",
-			Help: "Total CPU usage in cores for all pods in the deployment",
+			Name: "k8s_deployment_cpu_usage_millicores",
+			Help: "Total CPU usage in millicores for all pods in the deployment",
 		},
 		[]string{"namespace", "deployment"},
 	)
 
 	deploymentMemoryUsage = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "k8s_deployment_memory_usage_bytes",
-			Help: "Total memory usage in bytes for all pods in the deployment",
+			Name: "k8s_deployment_memory_usage_mebibytes",
+			Help: "Total memory usage in MiB for all pods in the deployment",
 		},
 		[]string{"namespace", "deployment"},
 	)
 
 	deploymentCPURequest = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "k8s_deployment_cpu_request_cores",
-			Help: "Total CPU requests in cores for all pods in the deployment",
+			Name: "k8s_deployment_cpu_request_millicores",
+			Help: "Total CPU requests in millicores for all pods in the deployment",
 		},
 		[]string{"namespace", "deployment"},
 	)
 
 	deploymentMemoryRequest = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "k8s_deployment_memory_request_bytes",
-			Help: "Total memory requests in bytes for all pods in the deployment",
+			Name: "k8s_deployment_memory_request_mebibytes",
+			Help: "Total memory requests in MiB for all pods in the deployment",
 		},
 		[]string{"namespace", "deployment"},
 	)
 
 	deploymentCPULimit = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "k8s_deployment_cpu_limit_cores",
-			Help: "Total CPU limits in cores for all pods in the deployment",
+			Name: "k8s_deployment_cpu_limit_millicores",
+			Help: "Total CPU limits in millicores for all pods in the deployment",
 		},
 		[]string{"namespace", "deployment"},
 	)
 
 	deploymentMemoryLimit = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "k8s_deployment_memory_limit_bytes",
-			Help: "Total memory limits in bytes for all pods in the deployment",
+			Name: "k8s_deployment_memory_limit_mebibytes",
+			Help: "Total memory limits in MiB for all pods in the deployment",
 		},
 		[]string{"namespace", "deployment"},
 	)
@@ -519,11 +519,11 @@ func (t *DeploymentTracker) collectResourceMetrics(namespace, deploymentName str
 		}
 	}
 
-	// Set request and limit metrics
-	deploymentCPURequest.WithLabelValues(namespace, deploymentName).Set(float64(totalCPURequest.MilliValue()) / 1000.0)
-	deploymentMemoryRequest.WithLabelValues(namespace, deploymentName).Set(float64(totalMemoryRequest.Value()))
-	deploymentCPULimit.WithLabelValues(namespace, deploymentName).Set(float64(totalCPULimit.MilliValue()) / 1000.0)
-	deploymentMemoryLimit.WithLabelValues(namespace, deploymentName).Set(float64(totalMemoryLimit.Value()))
+	// Set request and limit metrics (in millicores and MiB)
+	deploymentCPURequest.WithLabelValues(namespace, deploymentName).Set(float64(totalCPURequest.MilliValue()))
+	deploymentMemoryRequest.WithLabelValues(namespace, deploymentName).Set(float64(totalMemoryRequest.Value()) / 1024 / 1024)
+	deploymentCPULimit.WithLabelValues(namespace, deploymentName).Set(float64(totalCPULimit.MilliValue()))
+	deploymentMemoryLimit.WithLabelValues(namespace, deploymentName).Set(float64(totalMemoryLimit.Value()) / 1024 / 1024)
 
 	// Try to get actual usage from metrics server
 	if t.metricsClient != nil {
@@ -545,10 +545,9 @@ func (t *DeploymentTracker) collectResourceMetrics(namespace, deploymentName str
 			}
 		}
 
-		// Set usage metrics
-		cpuCores := float64(totalCPUUsage) / 1000.0
-		deploymentCPUUsage.WithLabelValues(namespace, deploymentName).Set(cpuCores)
-		deploymentMemoryUsage.WithLabelValues(namespace, deploymentName).Set(float64(totalMemoryUsage))
+		// Set usage metrics (millicores and MiB)
+		deploymentCPUUsage.WithLabelValues(namespace, deploymentName).Set(float64(totalCPUUsage))
+		deploymentMemoryUsage.WithLabelValues(namespace, deploymentName).Set(float64(totalMemoryUsage) / 1024 / 1024)
 
 		// Calculate usage percentages
 		if totalCPURequest.MilliValue() > 0 {
